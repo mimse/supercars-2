@@ -1,4 +1,6 @@
 import { Car } from "../entities/Car";
+import { Waypoint } from "../entities/AICar";
+import { Checkpoint } from "./RaceManager";
 
 interface TrackSegment {
   x: number;
@@ -7,9 +9,18 @@ interface TrackSegment {
   height: number;
 }
 
+interface StartPosition {
+  x: number;
+  y: number;
+  rotation: number;
+}
+
 export class Track {
   private roadSegments: TrackSegment[] = [];
   private trackWidth: number = 120;
+  private waypoints: Waypoint[] = [];
+  private checkpoints: Checkpoint[] = [];
+  private startPositions: StartPosition[] = [];
 
   constructor() {
     this.createDefaultTrack();
@@ -48,6 +59,41 @@ export class Track {
       width: this.trackWidth,
       height: 490,
     });
+
+    // Create AI waypoints (clockwise around track)
+    this.waypoints = [
+      { x: 250, y: 510 }, // Bottom straight start
+      { x: 400, y: 510 }, // Bottom straight mid
+      { x: 550, y: 510 }, // Bottom straight end
+      { x: 660, y: 450 }, // Right turn entry
+      { x: 660, y: 300 }, // Right side mid
+      { x: 660, y: 150 }, // Right side upper
+      { x: 600, y: 140 }, // Top right corner
+      { x: 400, y: 140 }, // Top straight mid
+      { x: 200, y: 140 }, // Top straight start
+      { x: 140, y: 200 }, // Left turn entry
+      { x: 140, y: 350 }, // Left side mid
+      { x: 140, y: 500 }, // Left side lower
+      { x: 200, y: 510 }, // Back to start
+    ];
+
+    // Create checkpoints for lap tracking (must pass through in order)
+    this.checkpoints = [
+      { x: 300, y: 450, width: 120, height: 120, index: 0 }, // Start/finish
+      { x: 600, y: 250, width: 120, height: 150, index: 1 }, // Right side
+      { x: 300, y: 80, width: 150, height: 120, index: 2 }, // Top
+      { x: 80, y: 250, width: 120, height: 150, index: 3 }, // Left side
+    ];
+
+    // Starting grid positions (staggered 2x3 grid)
+    this.startPositions = [
+      { x: 350, y: 480, rotation: 0 }, // P1 - front left
+      { x: 350, y: 530, rotation: 0 }, // P2 - front right
+      { x: 300, y: 480, rotation: 0 }, // P3 - mid left
+      { x: 300, y: 530, rotation: 0 }, // P4 - mid right
+      { x: 250, y: 480, rotation: 0 }, // P5 - back left
+      { x: 250, y: 530, rotation: 0 }, // P6 - back right
+    ];
   }
 
   render(ctx: CanvasRenderingContext2D): void {
@@ -136,5 +182,24 @@ export class Track {
       }
     }
     return false;
+  }
+
+  getWaypoints(): Waypoint[] {
+    return this.waypoints;
+  }
+
+  getCheckpoints(): Checkpoint[] {
+    return this.checkpoints;
+  }
+
+  getStartPositions(): StartPosition[] {
+    return this.startPositions;
+  }
+
+  getStartPosition(index: number): StartPosition {
+    return (
+      this.startPositions[index] ||
+      this.startPositions[this.startPositions.length - 1]
+    );
   }
 }

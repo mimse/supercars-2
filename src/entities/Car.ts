@@ -7,26 +7,26 @@ export class Car {
   rotation: number;
 
   // Velocity
-  private vx: number = 0;
-  private vy: number = 0;
+  protected vx: number = 0;
+  protected vy: number = 0;
 
   // Speed (magnitude of velocity)
   speed: number = 0;
 
-  // Car properties
-  private readonly maxSpeed: number = 300;
-  private readonly acceleration: number = 150;
-  private readonly brakeForce: number = 200;
-  private readonly friction: number = 0.98;
-  private readonly turnSpeed: number = 3;
-  private readonly offTrackFriction: number = 0.92;
+  // Car properties (protected for AI subclass access)
+  protected readonly maxSpeed: number = 300;
+  protected readonly acceleration: number = 150;
+  protected readonly brakeForce: number = 200;
+  protected readonly friction: number = 0.98;
+  protected readonly turnSpeed: number = 3;
+  protected readonly offTrackFriction: number = 0.92;
 
   // Car dimensions
   readonly width: number = 40;
   readonly height: number = 20;
 
   // State
-  private isOffTrack: boolean = false;
+  protected isOffTrack: boolean = false;
 
   constructor(x: number, y: number, rotation: number = -Math.PI / 2) {
     this.x = x;
