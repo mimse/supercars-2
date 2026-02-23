@@ -53,12 +53,13 @@ export class RaceManager {
     this.finishOrder = [];
 
     // Create racer info for player
+    // Start at checkpoint 1 - they haven't crossed finish line yet
     this.racers = [
       {
         car: playerCar,
         name: "Player",
         lap: 0,
-        checkpoint: 0,
+        checkpoint: 1,
         lastCheckpointTime: 0,
         totalTime: 0,
         finished: false,
@@ -73,7 +74,7 @@ export class RaceManager {
         car: ai,
         name: ai.name,
         lap: 0,
-        checkpoint: 0,
+        checkpoint: 1,
         lastCheckpointTime: 0,
         totalTime: 0,
         finished: false,
@@ -140,12 +141,8 @@ export class RaceManager {
       car.y >= nextCheckpoint.y &&
       car.y <= nextCheckpoint.y + nextCheckpoint.height
     ) {
-      racer.checkpoint++;
-      racer.lastCheckpointTime = performance.now();
-
-      // Check for lap completion (checkpoint 0 is start/finish)
-      if (racer.checkpoint >= this.checkpoints.length) {
-        racer.checkpoint = 0;
+      // Crossing checkpoint 0 (finish line) completes a lap
+      if (racer.checkpoint === 0) {
         racer.lap++;
 
         // Check for race finish
@@ -155,11 +152,15 @@ export class RaceManager {
           this.finishOrder.push(racer);
         }
       }
+
+      // Advance to next checkpoint
+      racer.checkpoint = (racer.checkpoint + 1) % this.checkpoints.length;
+      racer.lastCheckpointTime = performance.now();
     }
   }
 
   private updatePositions(): void {
-    // Sort racers by: finished status, lap count, checkpoint, distance to next checkpoint
+    // Sort racers by: finished status, lap count, checkpoint progress, distance to next checkpoint
     const sorted = [...this.racers].sort((a, b) => {
       // Finished racers are ahead
       if (a.finished && !b.finished) return -1;
@@ -168,10 +169,26 @@ export class RaceManager {
       // Compare laps
       if (a.lap !== b.lap) return b.lap - a.lap;
 
-      // Compare checkpoints
-      if (a.checkpoint !== b.checkpoint) return b.checkpoint - a.checkpoint;
+      // Compare checkpoint progress
+      // Racers start needing checkpoint 1, then 2, 3, 0 (finish)
+      // So the order is: 1 → 2 → 3 → 0
+      // Convert to linear progress value
+      const getCheckpointProgress = (cp: number) => {
+        // checkpoint 1 = start (lowest progress)
+        // checkpoint 0 = about to finish (highest progress)
+        if (cp === 1) return 0;
+        if (cp === 2) return 1;
+        if (cp === 3) return 2;
+        if (cp === 0) return 3;
+        return cp;
+      };
 
-      // Compare distance to next checkpoint
+      const progressA = getCheckpointProgress(a.checkpoint);
+      const progressB = getCheckpointProgress(b.checkpoint);
+
+      if (progressA !== progressB) return progressB - progressA;
+
+      // Compare distance to next checkpoint (closer = further ahead)
       const nextA = this.checkpoints[a.checkpoint];
       const nextB = this.checkpoints[b.checkpoint];
 

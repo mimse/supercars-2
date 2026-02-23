@@ -14,32 +14,70 @@ export class AICar extends Car {
   private readonly skillLevel: number;
   private readonly aggressiveness: number;
 
-  // Car color for rendering
-  readonly color: string;
+  // Car identification
   readonly name: string;
 
   constructor(
     x: number,
     y: number,
     rotation: number,
-    color: string,
+    spriteIndex: number,
     name: string,
     skillLevel: number = 0.8,
   ) {
     super(x, y, rotation);
-    this.color = color;
+    this.spriteIndex = spriteIndex;
     this.name = name;
     this.skillLevel = Math.min(1, Math.max(0.5, skillLevel));
     this.aggressiveness = 0.7 + Math.random() * 0.3;
   }
 
-  setWaypoints(waypoints: Waypoint[]): void {
+  setWaypoints(waypoints: Waypoint[], startIndex: number = 0): void {
     this.waypoints = waypoints;
-    this.currentWaypointIndex = 0;
+    this.currentWaypointIndex = startIndex;
+  }
+
+  findNearestWaypointAhead(): void {
+    if (this.waypoints.length === 0) return;
+
+    // Find waypoint that is ahead of the car (in the direction it's facing)
+    let bestIndex = 0;
+    let bestScore = -Infinity;
+
+    for (let i = 0; i < this.waypoints.length; i++) {
+      const wp = this.waypoints[i];
+      const dx = wp.x - this.x;
+      const dy = wp.y - this.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const angleToWaypoint = Math.atan2(dy, dx);
+
+      // Calculate how much the waypoint is "ahead" (in facing direction)
+      let angleDiff = angleToWaypoint - this.rotation;
+      while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+      while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+      // Score: prefer waypoints that are ahead (small angle diff) and not too far
+      // cos(angleDiff) is 1 when directly ahead, -1 when behind
+      const aheadScore = Math.cos(angleDiff);
+
+      // Only consider waypoints that are somewhat ahead
+      if (aheadScore > 0.3 && distance > 30 && distance < 300) {
+        const score = aheadScore * 100 - distance * 0.5;
+        if (score > bestScore) {
+          bestScore = score;
+          bestIndex = i;
+        }
+      }
+    }
+
+    this.currentWaypointIndex = bestIndex;
   }
 
   updateAI(dt: number): void {
     if (this.waypoints.length === 0) return;
+
+    // Destroyed AI cars move very slowly
+    const destroyedMultiplier = this.isDestroyed() ? 0.4 : 1;
 
     const target = this.waypoints[this.currentWaypointIndex];
 
@@ -87,47 +125,15 @@ export class AICar extends Car {
       this.brake(dt * this.aggressiveness);
     } else {
       // Accelerate with skill-based variation
-      this.accelerate(dt * this.skillLevel);
+      this.accelerate(dt * this.skillLevel * destroyedMultiplier);
     }
 
     // Update physics
     this.update(dt);
   }
 
-  render(ctx: CanvasRenderingContext2D): void {
-    ctx.save();
-
-    ctx.translate(this.x, this.y);
-    ctx.rotate(this.rotation);
-
-    // Draw car body with AI color
-    ctx.fillStyle = this.color;
-    ctx.fillRect(-this.width / 2, -this.height / 2, this.width, this.height);
-
-    // Draw car front (nose) - darker shade
-    ctx.fillStyle = this.darkenColor(this.color, 0.8);
-    ctx.fillRect(this.width / 2 - 8, -this.height / 2 + 2, 8, this.height - 4);
-
-    // Draw windshield
-    ctx.fillStyle = "#a8dadc";
-    ctx.fillRect(this.width / 2 - 18, -this.height / 2 + 4, 8, this.height - 8);
-
-    // Draw wheels
-    ctx.fillStyle = "#1d3557";
-    ctx.fillRect(this.width / 2 - 12, -this.height / 2 - 3, 10, 4);
-    ctx.fillRect(this.width / 2 - 12, this.height / 2 - 1, 10, 4);
-    ctx.fillRect(-this.width / 2 + 2, -this.height / 2 - 3, 10, 4);
-    ctx.fillRect(-this.width / 2 + 2, this.height / 2 - 1, 10, 4);
-
-    ctx.restore();
-  }
-
-  private darkenColor(hex: string, factor: number): string {
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    return `rgb(${Math.floor(r * factor)}, ${Math.floor(g * factor)}, ${Math.floor(b * factor)})`;
-  }
+  // AICar uses parent's render method with sprites
+  // No need to override - just set spriteSheet via setSprite()
 
   getCurrentWaypointIndex(): number {
     return this.currentWaypointIndex;
