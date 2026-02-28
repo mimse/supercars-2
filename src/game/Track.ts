@@ -60,7 +60,7 @@ export class Track {
   private trackName: string = "Grand Circuit";
   
   // Debug mode for checkpoint visualization
-  private debugMode: boolean = true; // Enable by default for debugging
+  private debugMode: boolean = false;
 
   constructor(config?: Partial<TrackConfig>) {
     if (config) {
