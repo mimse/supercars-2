@@ -1,12 +1,15 @@
 import { InputManager } from "../systems/Input";
 import { Car } from "../entities/Car";
-import { AICar } from "../entities/AICar";
+import { AICar, AvoidableCar } from "../entities/AICar";
 import { Track } from "./Track";
 import { RaceManager } from "./RaceManager";
 import { HUD, HUDData } from "../ui/HUD";
 import { Scenery } from "./Scenery";
 import { GameAssets } from "../systems/AssetLoader";
 import { CAR_COLORS } from "../utils/SpriteGenerator";
+import { Explosion } from "../effects/Explosion";
+import { Camera } from "../systems/Camera";
+import { ParallaxBackground, ParallaxLayerConfig } from "../systems/ParallaxBackground";
 
 export interface GameConfig {
   width: number;
@@ -42,9 +45,15 @@ export class Game {
   private raceManager: RaceManager;
   private hud: HUD;
   private scenery: Scenery;
+  private explosions: Explosion[] = [];
 
-  // Game area dimensions (excluding HUD) - 1.5x scale
-  private readonly gameAreaHeight: number = 825;  // 1.5x (was 1100 at 2x)
+  // Camera system for scrolling
+  private camera: Camera;
+  private parallaxLayers: ParallaxLayerConfig[] = [];
+
+  // Game area dimensions (excluding HUD)
+  private readonly gameAreaHeight: number;
+  private readonly hudHeight: number = 34;
 
   constructor(
     _canvas: HTMLCanvasElement,
@@ -55,6 +64,7 @@ export class Game {
     this.ctx = ctx;
     this.config = config;
     this.assets = assets;
+    this.gameAreaHeight = config.height - this.hudHeight;
 
     // Initialize systems
     this.input = new InputManager();
@@ -62,8 +72,31 @@ export class Game {
     this.hud = new HUD();
     this.scenery = new Scenery();
 
-    // Initialize track
-    this.track = new Track();
+    // Initialize track (larger world)
+    this.track = new Track({
+      name: "Grand Circuit",
+      worldWidth: 2400,
+      worldHeight: 1800,
+      trackWidth: 150,
+    });
+    
+    // Set world bounds for all cars
+    Car.worldWidth = this.track.getWorldWidth();
+    Car.worldHeight = this.track.getWorldHeight();
+    
+    // Initialize camera
+    this.camera = new Camera(
+      config.width,
+      this.gameAreaHeight,
+      this.track.getWorldWidth(),
+      this.track.getWorldHeight()
+    );
+    
+    // Generate parallax background layers
+    this.parallaxLayers = ParallaxBackground.generateRacingBackground(
+      config.width,
+      this.gameAreaHeight
+    );
     
     // Set track tiles
     this.track.setTiles(
@@ -72,11 +105,13 @@ export class Game {
       this.assets.sprites.finishLine
     );
 
-    // Generate scenery
+    // Generate scenery for the larger world
     this.scenery.generateScenery(
       this.track,
       this.assets.sprites.rocks,
-      this.assets.sprites.bushes
+      this.assets.sprites.bushes,
+      this.assets.sprites.trees,
+      this.assets.sprites.tireStack
     );
 
     // Initialize cars
@@ -84,6 +119,9 @@ export class Game {
 
     // Setup race
     this.setupRace();
+    
+    // Center camera on player start position
+    this.camera.centerOn(this.playerCar.x, this.playerCar.y);
   }
 
   private initializeCars(): void {
@@ -91,14 +129,14 @@ export class Game {
     const waypoints = this.track.getWaypoints();
     const spriteSheet = this.assets.sprites.cars;
 
-    // Player car at P1 (red car, sprite index 0)
-    const p1 = startPositions[0];
-    this.playerCar = new Car(p1.x, p1.y, p1.rotation);
+    // Player car at the back of the grid (last position)
+    const playerPos = startPositions[startPositions.length - 1];
+    this.playerCar = new Car(playerPos.x, playerPos.y, playerPos.rotation);
     this.playerCar.setSprite(spriteSheet, 0); // Red car
 
-    // AI cars at remaining positions
+    // AI cars at front positions (positions 0 to n-1)
     this.aiCars = AI_CARS_CONFIG.map((config, index) => {
-      const pos = startPositions[index + 1] || startPositions[startPositions.length - 1];
+      const pos = startPositions[index] || startPositions[startPositions.length - 2];
       const ai = new AICar(
         pos.x,
         pos.y,
@@ -160,8 +198,11 @@ export class Game {
     // Update race manager
     this.raceManager.update(dt);
 
-    // Only allow control during racing
-    if (this.raceManager.canPlayerControl()) {
+    // Check if player has exploded
+    const playerExploded = this.playerCar.hasExploded();
+
+    // Only allow control during racing and if player hasn't exploded
+    if (this.raceManager.canPlayerControl() && !playerExploded) {
       // Handle player input
       const inputState = this.input.getState();
 
@@ -181,20 +222,33 @@ export class Game {
       // Update player car physics
       this.playerCar.update(dt);
 
+      // Get active (non-exploded) AI cars
+      const activeAiCars = this.aiCars.filter(ai => !ai.hasExploded());
+      
       // Update AI cars
-      for (const ai of this.aiCars) {
-        ai.updateAI(dt);
+      // Create list of all active cars for avoidance (player + active AI cars)
+      const allCarsForAvoidance: AvoidableCar[] = [
+        this.playerCar,
+        ...activeAiCars
+      ];
+      
+      for (const ai of activeAiCars) {
+        ai.updateAI(dt, allCarsForAvoidance);
         this.track.checkCollision(ai);
         
         // AI barrier collision
         const aiBarrierHit = this.track.checkBarrierCollision(ai);
         if (aiBarrierHit.hit) {
-          ai.applyDamage(aiBarrierHit.damage);
+          if (ai.applyDamage(aiBarrierHit.damage)) {
+            this.spawnExplosion(ai.x, ai.y);
+          }
         }
 
         // AI off-track damage
         if (ai.isOffTrack) {
-          ai.applyDamage(dt * 1.5);
+          if (ai.applyDamage(dt * 1.5)) {
+            this.spawnExplosion(ai.x, ai.y);
+          }
         }
       }
 
@@ -202,19 +256,47 @@ export class Game {
       this.checkCarCollisions();
     }
 
-    // Check track boundaries for player
-    this.track.checkCollision(this.playerCar);
+    // Check track boundaries for player (only if not exploded)
+    if (!playerExploded) {
+      this.track.checkCollision(this.playerCar);
 
-    // Check barrier collision for player
-    const barrierHit = this.track.checkBarrierCollision(this.playerCar);
-    if (barrierHit.hit) {
-      this.playerCar.applyDamage(barrierHit.damage);
+      // Check barrier collision for player
+      const barrierHit = this.track.checkBarrierCollision(this.playerCar);
+      if (barrierHit.hit) {
+        if (this.playerCar.applyDamage(barrierHit.damage)) {
+          this.spawnExplosion(this.playerCar.x, this.playerCar.y);
+        }
+      }
+
+      // Off-track damage for player
+      if (this.playerCar.isOffTrack) {
+        if (this.playerCar.applyDamage(dt * 2)) {
+          this.spawnExplosion(this.playerCar.x, this.playerCar.y);
+        }
+      }
     }
 
-    // Off-track damage for player
-    if (this.playerCar.isOffTrack) {
-      this.playerCar.applyDamage(dt * 2);
+    // Update camera to follow player
+    if (!playerExploded) {
+      // Calculate player velocity for look-ahead
+      const velocityX = Math.cos(this.playerCar.rotation) * this.playerCar.speed;
+      const velocityY = Math.sin(this.playerCar.rotation) * this.playerCar.speed;
+      
+      this.camera.follow(
+        this.playerCar.x,
+        this.playerCar.y,
+        velocityX,
+        velocityY,
+        dt
+      );
     }
+
+    // Update explosions
+    for (const explosion of this.explosions) {
+      explosion.update(dt);
+    }
+    // Remove finished explosions
+    this.explosions = this.explosions.filter(e => !e.isFinished());
 
     // Handle restart input on results screen
     if (this.raceManager.getState() === "results") {
@@ -231,16 +313,28 @@ export class Game {
     for (const ai of this.aiCars) {
       ai.resetDamage();
     }
+    
+    // Clear any active explosions
+    this.explosions = [];
 
     this.initializeCars();
     this.setupRace();
+    
+    // Reset camera to player position
+    this.camera.centerOn(this.playerCar.x, this.playerCar.y);
+    
     setTimeout(() => {
       this.raceManager.startCountdown();
     }, 500);
   }
 
+  private spawnExplosion(x: number, y: number): void {
+    this.explosions.push(new Explosion(x, y));
+  }
+
   private checkCarCollisions(): void {
-    const allCars = [this.playerCar, ...this.aiCars];
+    // Only check collisions between active (non-exploded) cars
+    const allCars = [this.playerCar, ...this.aiCars].filter(car => !car.hasExploded());
 
     // Check each pair of cars
     for (let i = 0; i < allCars.length; i++) {
@@ -254,43 +348,76 @@ export class Game {
           // Apply collision damage based on relative speed
           const relativeSpeed = Math.abs(car1.speed - car2.speed);
           const damage = Math.min(8, relativeSpeed * 0.04);
-          car1.applyDamage(damage);
-          car2.applyDamage(damage);
+          if (car1.applyDamage(damage)) {
+            this.spawnExplosion(car1.x, car1.y);
+          }
+          if (car2.applyDamage(damage)) {
+            this.spawnExplosion(car2.x, car2.y);
+          }
         }
       }
     }
   }
 
   private render(): void {
+    // Clear entire canvas
+    this.ctx.fillStyle = '#000000';
+    this.ctx.fillRect(0, 0, this.config.width, this.config.height);
+
     // Render game area (clipped to exclude HUD)
     this.ctx.save();
     this.ctx.beginPath();
     this.ctx.rect(0, 0, this.config.width, this.gameAreaHeight);
     this.ctx.clip();
 
-    // Render grass background
-    this.track.renderGrass(this.ctx);
+    // Render parallax background layers (in screen space, before camera transform)
+    this.renderParallaxLayers();
+
+    // Apply camera transform for world-space rendering
+    this.camera.applyTransform(this.ctx);
+
+    // Get camera bounds for culling
+    const cameraBounds = this.camera.getVisibleBounds(100);
+
+    // Render grass background (world space)
+    this.track.renderGrass(this.ctx, this.camera.x, this.camera.y, this.config.width, this.gameAreaHeight);
 
     // Render scenery (behind track)
-    this.scenery.render(this.ctx);
+    this.renderVisibleScenery(cameraBounds);
 
     // Render track
-    this.track.render(this.ctx);
+    this.track.render(this.ctx, cameraBounds);
 
     // Render barriers
-    this.track.renderBarriers(this.ctx);
+    this.track.renderBarriers(this.ctx, cameraBounds);
+    
+    // Render checkpoint debug visualization (if enabled)
+    this.track.renderCheckpoints(this.ctx);
 
-    // Sort all cars by Y position for proper layering
-    const allCars = [this.playerCar, ...this.aiCars];
+    // Sort all active (non-exploded) cars by Y position for proper layering
+    const allCars = [this.playerCar, ...this.aiCars].filter(car => !car.hasExploded());
     allCars.sort((a, b) => a.y - b.y);
 
-    // Render all cars
+    // Render all active cars (with visibility check)
     for (const car of allCars) {
-      car.render(this.ctx);
+      if (this.camera.isVisible(car.x - car.width/2, car.y - car.height/2, car.width, car.height, 50)) {
+        car.render(this.ctx);
+      }
     }
 
-    // Render race state overlays (countdown, etc.)
+    // Render explosions (on top of cars)
+    for (const explosion of this.explosions) {
+      explosion.render(this.ctx);
+    }
+
+    // Reset camera transform
+    this.camera.resetTransform(this.ctx);
+
+    // Render race state overlays (in screen space)
     this.renderGameOverlays();
+
+    // Render minimap
+    this.renderMinimap();
 
     this.ctx.restore();
 
@@ -300,6 +427,118 @@ export class Game {
     // Render results overlay (full screen)
     if (this.raceManager.getState() === "results") {
       this.renderResults();
+    }
+  }
+
+  /**
+   * Render parallax background layers
+   */
+  private renderParallaxLayers(): void {
+    for (const layer of this.parallaxLayers) {
+      const parallaxX = this.camera.x * layer.speed;
+      const parallaxY = this.camera.y * layer.speed;
+      
+      const tileWidth = layer.canvas.width;
+      const tileHeight = layer.canvas.height;
+      
+      // Calculate starting tile position
+      const startX = -(parallaxX % tileWidth);
+      const startY = -(parallaxY % tileHeight);
+      
+      // Handle negative modulo
+      const adjustedStartX = startX > 0 ? startX - tileWidth : startX;
+      const adjustedStartY = startY > 0 ? startY - tileHeight : startY;
+      
+      // Draw tiles to cover viewport
+      for (let y = adjustedStartY; y < this.gameAreaHeight; y += tileHeight) {
+        for (let x = adjustedStartX; x < this.config.width; x += tileWidth) {
+          this.ctx.drawImage(layer.canvas, x, y);
+        }
+      }
+    }
+  }
+
+  /**
+   * Render only visible scenery items
+   */
+  private renderVisibleScenery(_cameraBounds: { minX: number; minY: number; maxX: number; maxY: number }): void {
+    // The scenery class handles its own rendering, but we could add culling here
+    // For now, just render all scenery (it's relatively lightweight)
+    this.scenery.render(this.ctx);
+  }
+
+  /**
+   * Render minimap showing track and car positions
+   */
+  private renderMinimap(): void {
+    const mapWidth = 150;
+    const mapHeight = 100;
+    const mapX = this.config.width - mapWidth - 10;
+    const mapY = 10;
+    const padding = 5;
+
+    // Scale factors
+    const scaleX = (mapWidth - padding * 2) / this.track.getWorldWidth();
+    const scaleY = (mapHeight - padding * 2) / this.track.getWorldHeight();
+
+    // Background
+    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    this.ctx.fillRect(mapX, mapY, mapWidth, mapHeight);
+
+    // Border
+    this.ctx.strokeStyle = '#444444';
+    this.ctx.lineWidth = 1;
+    this.ctx.strokeRect(mapX, mapY, mapWidth, mapHeight);
+
+    // Draw track outline (simplified rectangle for now)
+    this.ctx.strokeStyle = '#555555';
+    this.ctx.lineWidth = 2;
+    const trackMargin = 100;
+    this.ctx.strokeRect(
+      mapX + padding + trackMargin * scaleX,
+      mapY + padding + trackMargin * scaleY,
+      (this.track.getWorldWidth() - 2 * trackMargin) * scaleX,
+      (this.track.getWorldHeight() - 2 * trackMargin) * scaleY
+    );
+
+    // Draw camera viewport
+    this.ctx.strokeStyle = '#ffffff';
+    this.ctx.lineWidth = 1;
+    this.ctx.strokeRect(
+      mapX + padding + this.camera.x * scaleX,
+      mapY + padding + this.camera.y * scaleY,
+      this.config.width * scaleX,
+      this.gameAreaHeight * scaleY
+    );
+
+    // Draw AI cars as small dots
+    for (const ai of this.aiCars) {
+      if (ai.hasExploded()) continue;
+      const colorIndex = AI_CARS_CONFIG.find(c => c.name === ai.name)?.spriteIndex || 1;
+      this.ctx.fillStyle = CAR_COLORS[colorIndex].main;
+      this.ctx.fillRect(
+        mapX + padding + ai.x * scaleX - 2,
+        mapY + padding + ai.y * scaleY - 2,
+        4, 4
+      );
+    }
+
+    // Draw player car (larger, highlighted)
+    if (!this.playerCar.hasExploded()) {
+      this.ctx.fillStyle = CAR_COLORS[0].main;
+      this.ctx.fillRect(
+        mapX + padding + this.playerCar.x * scaleX - 3,
+        mapY + padding + this.playerCar.y * scaleY - 3,
+        6, 6
+      );
+      // White outline
+      this.ctx.strokeStyle = '#ffffff';
+      this.ctx.lineWidth = 1;
+      this.ctx.strokeRect(
+        mapX + padding + this.playerCar.x * scaleX - 3,
+        mapY + padding + this.playerCar.y * scaleY - 3,
+        6, 6
+      );
     }
   }
 
@@ -348,6 +587,16 @@ export class Game {
       this.config.width / 2,
       this.gameAreaHeight / 2,
     );
+    
+    // Show track name
+    this.ctx.fillStyle = "#ffff00";
+    this.ctx.font = "bold 16px monospace";
+    this.ctx.fillText(
+      this.track.getTrackName().toUpperCase(),
+      this.config.width / 2,
+      this.gameAreaHeight / 2 - 40,
+    );
+    
     this.ctx.textAlign = "left";
   }
 
@@ -392,10 +641,10 @@ export class Game {
 
     // Center X for the results table
     const centerX = this.config.width / 2;
-    const tableWidth = 380;  // Total width of results table
+    const tableWidth = 380;
     const tableLeft = centerX - tableWidth / 2;
 
-    // Title (15% larger: 24 -> 28)
+    // Title
     this.ctx.fillStyle = "#ffff00";
     this.ctx.font = "bold 28px monospace";
     this.ctx.textAlign = "center";
@@ -406,7 +655,7 @@ export class Game {
     const sorted = [...racers].sort((a, b) => a.position - b.position);
 
     // Calculate vertical centering for the table
-    const rowHeight = 29;  // 15% larger: 25 -> 29
+    const rowHeight = 29;
     const tableHeight = sorted.length * rowHeight;
     const tableStartY = (this.config.height - tableHeight) / 2;
 
@@ -418,11 +667,11 @@ export class Game {
       const colorIndex = isPlayer ? 0 : (AI_CARS_CONFIG.find(c => c.name === racer.name)?.spriteIndex || 0);
       const carColor = CAR_COLORS[colorIndex];
 
-      // Color indicator (15% larger: 13 -> 15)
+      // Color indicator
       this.ctx.fillStyle = carColor.main;
       this.ctx.fillRect(tableLeft, y - 9, 15, 15);
 
-      // Position (15% larger: 16 -> 18)
+      // Position
       this.ctx.fillStyle = this.getPositionColor(racer.position);
       this.ctx.font = "bold 18px monospace";
       this.ctx.textAlign = "left";
@@ -432,12 +681,12 @@ export class Game {
         y,
       );
 
-      // Name (15% larger: 13 -> 15)
+      // Name
       this.ctx.fillStyle = isPlayer ? "#ffff00" : "#ffffff";
       this.ctx.font = isPlayer ? "bold 15px monospace" : "15px monospace";
       this.ctx.fillText(racer.name.substring(0, 15), tableLeft + 75, y);
 
-      // Time (if finished) (15% larger: 12 -> 14)
+      // Time (if finished)
       this.ctx.fillStyle = "#aaaaaa";
       this.ctx.font = "14px monospace";
       this.ctx.textAlign = "right";
@@ -447,7 +696,7 @@ export class Game {
         this.ctx.fillText("DNF", tableLeft + tableWidth - 40, y);
       }
 
-      // Damage indicator (15% larger: 8 -> 9)
+      // Damage indicator
       const damagePercent = isPlayer ? this.playerCar.getDamagePercent() : 0;
       if (damagePercent > 0.5) {
         this.ctx.fillStyle = "#ff4444";
@@ -458,7 +707,7 @@ export class Game {
       this.ctx.textAlign = "left";
     });
 
-    // Player final position highlight (15% larger: 13 -> 15)
+    // Player final position highlight
     const player = this.raceManager.getPlayerInfo();
     if (player) {
       this.ctx.fillStyle = "#ffffff";
@@ -471,7 +720,7 @@ export class Game {
       );
     }
 
-    // Restart prompt (15% larger: 11 -> 13)
+    // Restart prompt
     this.ctx.fillStyle = "#888888";
     this.ctx.font = "13px monospace";
     this.ctx.fillText(

@@ -16,6 +16,7 @@ export interface RacerInfo {
   lastCheckpointTime: number;
   totalTime: number;
   finished: boolean;
+  exploded: boolean;
   position: number;
   isPlayer: boolean;
 }
@@ -63,6 +64,7 @@ export class RaceManager {
         lastCheckpointTime: 0,
         totalTime: 0,
         finished: false,
+        exploded: false,
         position: 1,
         isPlayer: true,
       },
@@ -78,6 +80,7 @@ export class RaceManager {
         lastCheckpointTime: 0,
         totalTime: 0,
         finished: false,
+        exploded: false,
         position: this.racers.length + 1,
         isPlayer: false,
       });
@@ -106,17 +109,27 @@ export class RaceManager {
     }
 
     if (this.state === "racing") {
-      // Update checkpoints for all racers
+      // Check for exploded cars and update their status
+      this.racers.forEach((racer) => {
+        if (!racer.exploded && racer.car.hasExploded()) {
+          racer.exploded = true;
+          racer.finished = true; // Mark as finished so they get a position
+          racer.totalTime = performance.now() - this.raceStartTime;
+        }
+      });
+
+      // Update checkpoints for all active racers
       this.racers.forEach((racer) => this.updateRacerCheckpoint(racer));
 
       // Update positions
       this.updatePositions();
 
-      // Check if race is finished (all racers done or player finished)
-      const playerFinished = this.racers.find((r) => r.isPlayer)?.finished;
-      const allFinished = this.racers.every((r) => r.finished);
+      // Check if race is finished (player finished/exploded or all racers done)
+      const player = this.racers.find((r) => r.isPlayer);
+      const playerDone = player?.finished || player?.exploded;
+      const allFinished = this.racers.every((r) => r.finished || r.exploded);
 
-      if (playerFinished || allFinished) {
+      if (playerDone || allFinished) {
         this.state = "finished";
         // Auto transition to results after short delay
         setTimeout(() => {
@@ -127,7 +140,7 @@ export class RaceManager {
   }
 
   private updateRacerCheckpoint(racer: RacerInfo): void {
-    if (racer.finished) return;
+    if (racer.finished || racer.exploded) return;
 
     const car = racer.car;
     const nextCheckpoint = this.checkpoints[racer.checkpoint];
@@ -141,15 +154,20 @@ export class RaceManager {
       car.y >= nextCheckpoint.y &&
       car.y <= nextCheckpoint.y + nextCheckpoint.height
     ) {
+      // Debug logging
+      console.log(`${racer.name} crossed checkpoint ${racer.checkpoint} at (${car.x.toFixed(0)}, ${car.y.toFixed(0)}), lap: ${racer.lap}`);
+      
       // Crossing checkpoint 0 (finish line) completes a lap
       if (racer.checkpoint === 0) {
         racer.lap++;
+        console.log(`${racer.name} completed lap ${racer.lap}/${this.totalLaps}`);
 
         // Check for race finish
         if (racer.lap >= this.totalLaps) {
           racer.finished = true;
           racer.totalTime = performance.now() - this.raceStartTime;
           this.finishOrder.push(racer);
+          console.log(`${racer.name} FINISHED!`);
         }
       }
 
@@ -160,9 +178,13 @@ export class RaceManager {
   }
 
   private updatePositions(): void {
-    // Sort racers by: finished status, lap count, checkpoint progress, distance to next checkpoint
+    // Sort racers by: exploded status (last), finished status, lap count, checkpoint progress, distance to next checkpoint
     const sorted = [...this.racers].sort((a, b) => {
-      // Finished racers are ahead
+      // Exploded racers go to the back
+      if (a.exploded && !b.exploded) return 1;
+      if (!a.exploded && b.exploded) return -1;
+      
+      // Finished (non-exploded) racers are ahead
       if (a.finished && !b.finished) return -1;
       if (!a.finished && b.finished) return 1;
 

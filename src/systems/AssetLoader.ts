@@ -75,7 +75,20 @@ export class AssetLoader {
       SpriteGenerator.generateBush(0),
       SpriteGenerator.generateBush(1),
     ];
-    await this.delay(30);
+    await this.delay(20);
+    onProgress?.(0.85);
+
+    // Generate trees
+    const trees = [
+      SpriteGenerator.generateTree(0),
+      SpriteGenerator.generateTree(1),
+    ];
+    await this.delay(20);
+    onProgress?.(0.92);
+
+    // Generate tire stack
+    const tireStack = SpriteGenerator.generateTireStack();
+    await this.delay(10);
     onProgress?.(1);
 
     this.assets = {
@@ -86,6 +99,8 @@ export class AssetLoader {
         finishLine,
         rocks,
         bushes,
+        trees,
+        tireStack,
       },
       loaded: true,
     };

@@ -1,4 +1,9 @@
 export class Car {
+  // World bounds (can be set globally for all cars)
+  static worldWidth: number = 2400;
+  static worldHeight: number = 1800;
+  static readonly worldMargin: number = 40;
+  
   // Position
   x: number;
   y: number;
@@ -35,6 +40,7 @@ export class Car {
   damage: number = 0;
   readonly maxDamage: number = 100;
   private damageFlashTimer: number = 0;
+  private _hasExploded: boolean = false;
 
   // State
   protected _isOffTrack: boolean = false;
@@ -55,11 +61,20 @@ export class Car {
 
   /**
    * Apply damage to the car
+   * Returns true if the car just got destroyed (for triggering explosion)
    */
-  applyDamage(amount: number): void {
-    if (amount <= 0) return;
+  applyDamage(amount: number): boolean {
+    if (amount <= 0 || this._hasExploded) return false;
+    const wasDestroyed = this.isDestroyed();
     this.damage = Math.min(this.maxDamage, this.damage + amount);
     this.damageFlashTimer = 0.15; // Flash for 150ms
+    
+    // Mark as exploded when destroyed
+    if (!wasDestroyed && this.isDestroyed()) {
+      this._hasExploded = true;
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -67,6 +82,13 @@ export class Car {
    */
   isDestroyed(): boolean {
     return this.damage >= this.maxDamage;
+  }
+
+  /**
+   * Check if car has exploded and should be removed from game
+   */
+  hasExploded(): boolean {
+    return this._hasExploded;
   }
 
   /**
@@ -82,6 +104,7 @@ export class Car {
   resetDamage(): void {
     this.damage = 0;
     this.damageFlashTimer = 0;
+    this._hasExploded = false;
   }
 
   /**
@@ -135,9 +158,10 @@ export class Car {
     // Reset off-track flag (will be set by track collision check)
     this._isOffTrack = false;
 
-    // Keep car in bounds (screen wrap protection) - 1.5x scale (1200x825 game area)
-    this.x = Math.max(40, Math.min(1160, this.x));
-    this.y = Math.max(40, Math.min(785, this.y));
+    // Keep car in bounds (world bounds protection)
+    const margin = Car.worldMargin;
+    this.x = Math.max(margin, Math.min(Car.worldWidth - margin, this.x));
+    this.y = Math.max(margin, Math.min(Car.worldHeight - margin, this.y));
 
     // Update damage flash timer
     if (this.damageFlashTimer > 0) {
@@ -328,12 +352,12 @@ export class Car {
     const speedDiff = thisSpeed - otherSpeed;
     const pushStrength = Math.max(0.5, Math.min(2, 1 + speedDiff / 100));
 
-    // Separate the cars
+    // Separate the cars - use equal force for fair collision response
     const separationForce = overlap * 0.6;
-    this.x -= nx * separationForce * 0.4;
-    this.y -= ny * separationForce * 0.4;
-    other.x += nx * separationForce * 0.6;
-    other.y += ny * separationForce * 0.6;
+    this.x -= nx * separationForce * 0.5;
+    this.y -= ny * separationForce * 0.5;
+    other.x += nx * separationForce * 0.5;
+    other.y += ny * separationForce * 0.5;
 
     // Apply push based on collision type
     if (isHittingFront && thisSpeed > otherSpeed) {
@@ -355,10 +379,10 @@ export class Car {
       const pushAmount = (otherSpeed - thisSpeed) * 0.3 * pushStrength;
       this.applyPush(thisForward.x * pushAmount, thisForward.y * pushAmount);
     } else {
-      // Side collision - push sideways
-      const sideForce = 30 * pushStrength;
+      // Side collision - push sideways with equal and opposite force
+      const sideForce = 20 * pushStrength;
       other.applyPush(nx * sideForce, ny * sideForce);
-      this.applyPush(-nx * sideForce * 0.5, -ny * sideForce * 0.5);
+      this.applyPush(-nx * sideForce, -ny * sideForce);
 
       // Both cars slow down on side collision
       this.speed *= 0.95;

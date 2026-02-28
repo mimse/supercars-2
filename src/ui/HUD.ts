@@ -153,7 +153,7 @@ export class HUD {
   /**
    * Render LAPS section
    */
-  private renderLapsSection(ctx: CanvasRenderingContext2D, lap: number, _totalLaps: number): void {
+  private renderLapsSection(ctx: CanvasRenderingContext2D, lap: number, totalLaps: number): void {
     const sectionX = this.speedWidth + this.posWidth + 7;
     const centerY = this.panelY + this.panelHeight / 2;
 
@@ -164,12 +164,12 @@ export class HUD {
     ctx.textBaseline = 'top';
     ctx.fillText('LAPS', sectionX, this.panelY + 4);
 
-    // Lap number (large)
+    // Lap number as "current/total" (e.g., "1/3")
     ctx.fillStyle = this.valueColor;
-    ctx.font = 'bold 17px monospace';
+    ctx.font = 'bold 14px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(lap.toString(), sectionX + 33, centerY + 4);
+    ctx.fillText(`${lap}/${totalLaps}`, sectionX + 33, centerY + 4);
   }
 
   /**
